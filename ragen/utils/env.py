@@ -75,6 +75,9 @@ def get_train_val_env(env_class, config: dict):
     elif config.env.name == 'countdown':
         env = env_class(parquet_path=config.env.train_path)
         val_env = env_class(parquet_path=config.env.val_path)
+    elif config.env.name == 'medical_consultation':
+        env = env_class(parquet_path=config.env.train_path)
+        val_env = env_class(parquet_path=config.env.val_path)
     else:
         raise ValueError(f"Environment {config.env.name} not supported")
 

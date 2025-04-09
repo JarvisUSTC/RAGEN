@@ -1,0 +1,4 @@
+# Environment settings
+env:
+  name: "medical_consultation"
+  data_dir: "data/medical_consultation"
