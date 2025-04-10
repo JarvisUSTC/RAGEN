@@ -27,6 +27,8 @@ class GenerationConfig:
     state_masking: bool=False
     start_state_marker: str="<start-state>"
     end_state_marker: str="<end-state>"
+    use_env_llm: bool=False
+    batch_size: int=1
 
 class LLMGenerationManager:
     def __init__(
@@ -36,6 +38,7 @@ class LLMGenerationManager:
         env_class,
         config: GenerationConfig,
         logger: Tracking,
+        env_llm_wg=None,
         is_validation: bool = False,
     ):
         self.tokenizer = tokenizer
@@ -44,6 +47,7 @@ class LLMGenerationManager:
         self.config = config
         self.logger = logger
         self.is_validation = is_validation
+        self.env_llm_wg = env_llm_wg
         
         self.tensor_fn = TensorHelper(TensorConfig(
             pad_token_id=tokenizer.pad_token_id,

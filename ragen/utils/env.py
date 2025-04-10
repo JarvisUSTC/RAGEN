@@ -76,8 +76,36 @@ def get_train_val_env(env_class, config: dict):
         env = env_class(parquet_path=config.env.train_path)
         val_env = env_class(parquet_path=config.env.val_path)
     elif config.env.name == 'medical_consultation':
-        env = env_class(parquet_path=config.env.train_path)
-        val_env = env_class(parquet_path=config.env.val_path)
+        # Initialize environment LLM worker if needed
+        env_llm_worker = None
+        tokenizer = None
+        
+        if config.env.get('use_env_llm', False):
+            from ragen.workers.env_llm_worker import EnvironmentLLMWorker
+            from transformers import AutoTokenizer
+            
+            # Initialize environment LLM worker
+            env_llm_worker = EnvironmentLLMWorker(config.env_llm)
+            
+            # Initialize tokenizer for the environment LLM
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.env_llm.model.path,
+                trust_remote_code=config.env_llm.model.get('trust_remote_code', False)
+            )
+            
+            print(f"[INFO] Initialized environment LLM worker with model: {config.env_llm.model.path}")
+        
+        env = env_class(
+            parquet_path=config.env.train_path,
+            env_llm_worker=env_llm_worker,
+            tokenizer=tokenizer
+        )
+        
+        val_env = env_class(
+            parquet_path=config.env.val_path,
+            env_llm_worker=env_llm_worker,
+            tokenizer=tokenizer
+        )
     else:
         raise ValueError(f"Environment {config.env.name} not supported")
 

@@ -1,4 +1,36 @@
-# Environment settings
 env:
-  name: "medical_consultation"
-  data_dir: "data/medical_consultation"
+  use_env_llm: true  # 启用环境LLM
+  train_path: "data/medical_consultation/train.parquet"  # 替换成你的训练数据路径
+  val_path: "data/medical_consultation/val.parquet"      # 替换成你的验证数据路径
+
+env_llm:
+  fsdp_config:
+    fsdp_size: 1  # 单GPU时设为1
+    model_dtype: "bf16"  # 使用 bfloat16 以提高性能
+    param_offload: false  # 如果GPU内存足够，设为false
+    mixed_precision:
+      param_dtype: "bf16"
+      reduce_dtype: "fp32"
+      buffer_dtype: "fp32"
+    wrap_policy: null  # 使用transformer的wrap策略
+
+  model:
+    path: "Qwen/Qwen2.5-7B-Instruct"  # 替换为你实际的 HuggingFace 模型路径或本地路径
+    trust_remote_code: true
+    use_liger: true  # 启用Liger kernel优化
+    override_config:
+      max_position_embeddings: 4096
+      use_flash_attention_2: true  # 启用Flash Attention 2
+      use_cache: true  # 启用KV cache
+
+  ulysses_sequence_parallel_size: 1  # 设置为 >1 开启 sequence parallel
+
+  generation:
+    max_length: 2048
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 50
+    repetition_penalty: 1.0
+    do_sample: true
+    num_beams: 1  # 使用贪婪解码
+    use_cache: true  # 启用KV cache

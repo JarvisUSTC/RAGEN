@@ -39,6 +39,12 @@ class SFTPipeline:
                 'SIZE': config['sft']['frozenlake']['size'],
                 'P': config['sft']['frozenlake']['p'],
                 'IS_SLIPPERY': config['sft']['frozenlake']['is_slippery']
+            },
+            'medical_consultation': {
+                'USE_ENV_LLM': config['sft'].get('medical_consultation', {}).get('use_env_llm', False),
+                'ENV_LLM_MODEL': config['sft'].get('medical_consultation', {}).get('env_llm_model', None),
+                'ENV_LLM_MAX_LENGTH': config['sft'].get('medical_consultation', {}).get('env_llm_max_length', 512),
+                'ENV_LLM_TEMPERATURE': config['sft'].get('medical_consultation', {}).get('env_llm_temperature', 0.7)
             }
         }
 
