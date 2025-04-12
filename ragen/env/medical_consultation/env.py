@@ -76,7 +76,7 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
             )
 
         # Create mapping from original indices to sequential indices
-        original_indices = [item['index'] for item in df.extra_info.values]
+        original_indices = [json.loads(item)['index'] for item in df.extra_info.values]
         seed_to_index = {orig_idx: new_idx for new_idx, orig_idx in enumerate(original_indices)}
         
         return data, seed_to_index
@@ -117,13 +117,13 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
             diagnosis = re.search(r"<diagnosis>(.*?)</diagnosis>", action).group(1)
             self.diagnosis_made = True
             # GT diagnosis
-            gt_diagnosis = self.data[self.index]['target']['诊断'] # TODO: change to the unified format
+            gt_diagnosis = self.data[self.index]['target']['diagnosis'] # TODO: change to the unified format
             # Calculate the similarity score based on Longest Common Subsequence (LCS)
             similarity = self._get_rouge_score(diagnosis, gt_diagnosis)
             reward = similarity * 10 # Scale the reward to 10
 
             # GT Suggestion
-            gt_suggestion = self.data[self.index]['target']['建议'] # TODO: change to the unified format
+            gt_suggestion = self.data[self.index]['target']['recommendation'] # TODO: change to the unified format
             if len(gt_suggestion) > 0:
                 suggestion = re.search(r"<suggestion>(.*?)</suggestion>", action).group(1)
                 similarity = self._get_rouge_score(suggestion, gt_suggestion)
@@ -215,14 +215,44 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
                 candidate_questions_text += f"  Response: {' '.join(q_item['patient_response'])}\n\n"
         
         # Create the prompt
-        prompt = f"""<|im_start|>user\nYou are a patient to answer the doctor's question.
+        prompt = f"""<|im_start|>user\nYou are a patient answering a doctor's question.
+
+Below are some candidate doctor questions and the corresponding patient responses.
+
+Your task is to follow these steps:
+1. Compare the doctor's new question with the candidate questions.
+2. Find the most semantically similar candidate question (do not require exact wording).
+3. Respond using the corresponding patient response.
+4. Format your output like this:
+   Response: [your patient response]
+   <answer>N</answer>  # where N is the index number of the matched candidate question
+5. If no candidate question is semantically similar, respond naturally as a patient and write <answer>-1</answer>.
+
+Remember: Semantic similarity is based on meaning, not exact words.
+
+---
+
+Example:
+
+Candidate questions:
+Question 0:
+  - How long has this been going on?
+  Response: About two or three days. It's a dull pain that comes and goes.
+
+Doctor's question: How long have you had this issue?
+
+→ This is semantically similar to Question 0.
+
+Response: About two or three days. It's a dull pain that comes and goes.
+<answer>0</answer>
+
+---
+
+Now complete the following:
 
 {candidate_questions_text}
 
-Your task is to:
-1. Check if the doctor's question below matches any of the candidate questions.
-2. If there's a match, respond with the corresponding patient response and include the question number in <answer>N</answer> where N is the question number (starting from 0).
-3. If there's no match, respond naturally as a patient would and include <answer>-1</answer>.
+---
 
 Doctor's question: {doctor_question}
 
@@ -602,18 +632,25 @@ if __name__ == "__main__":
     )
     
     # 重置环境
-    observation = env.reset(seed=0)
+    observation = env.reset(seed=1)
     print("Initial observation:")
     print(observation)
     print("\n" + "="*50 + "\n")
     
     # 测试提问
+    # questions = [
+    #     "你好，请问你的症状持续多久了?",
+    #     "有没有用过什么药？",
+    #     "还有其他症状吗？"
+    # ]
+
+    # 英文提问
     questions = [
-        "你好，请问你的症状持续多久了?",
-        "有没有用过什么药？",
-        "还有其他症状吗？"
+        "Hello, how long have you been feeling sick?",
+        "Have you taken any medicine?",
+        "Do you have any other symptoms?"
     ]
-    
+
     for i, question in enumerate(questions):
         print(f"Turn {i+1}: Doctor asks: {question}")
         observation, reward, done, info = env.step(question)
@@ -624,7 +661,9 @@ if __name__ == "__main__":
         print("\n" + "="*50 + "\n")
     
     # 测试诊断
-    diagnosis = "<diagnosis>患者可能患有肠炎</diagnosis><suggestion>建议服用抗生素，多休息，多喝水</suggestion>"
+    # diagnosis = "<diagnosis>患者可能患有肠炎</diagnosis><suggestion>建议服用抗生素，多休息，多喝水</suggestion>"
+    # 英文诊断
+    diagnosis = "<diagnosis>The patient may have enteritis</diagnosis><suggestion>Recommend taking antibiotics, rest more, and drink more water</suggestion>"
     print(f"Doctor makes diagnosis: {diagnosis}")
     observation, reward, done, info = env.step(diagnosis)
     print(f"Final observation: {observation}")
@@ -643,7 +682,7 @@ if __name__ == "__main__":
     # 测试批量处理
     print("\nTesting batch processing:")
     envs = [env.copy() for _ in range(3)]
-    predictions = ["你好，请问你的症状持续多久了？", "有没有用过什么药？", "还有其他症状吗？"]
+    predictions = ["Hello, how long have you been feeling sick?", "Have you taken any medicine?", "Do you have any other symptoms?"]
     prediction_ids = torch.tensor([0, 1, 2])
     
     next_obs, dones = MedicalConsultationEnv.execute_predictions(envs, predictions, prediction_ids, tokenizer)

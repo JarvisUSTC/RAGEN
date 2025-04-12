@@ -24,3 +24,4 @@ pyarrow>=15.0.0
 pylatexenc
 torchdata
 liger_kernel
+rouge-score
