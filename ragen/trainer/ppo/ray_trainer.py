@@ -57,6 +57,7 @@ class Role(Enum):
     RefPolicy = 4
     RewardModel = 5
     ActorRolloutRef = 6
+    EnvLLM = 7
 
 
 @dataclass
@@ -523,6 +524,14 @@ class RayPPOTrainer(object):
             rm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RewardModel], config=self.config.reward_model)
             self.resource_pool_to_cls[resource_pool]['rm'] = rm_cls
 
+        # create env_llm worker
+        if self.config.env.use_env_llm:
+            resource_pool = self.resource_pool_manager.get_resource_pool(Role.EnvLLM)
+            env_llm_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.EnvLLM], 
+                                            config=self.config.env.env_llm,
+                                            role='env_llm')
+            self.resource_pool_to_cls[resource_pool]['env_llm'] = env_llm_cls
+
         # initialize WorkerGroup
         # NOTE: if you want to use a different resource pool for each role, which can support different parallel size,
         # you should not use `create_colocated_worker_cls`. Instead, directly pass different resource pool to different worker groups.
@@ -548,6 +557,13 @@ class RayPPOTrainer(object):
         if self.use_rm:
             self.rm_wg = all_wg['rm']
             self.rm_wg.init_model()
+
+        # initialize env_llm worker
+        if self.config.env.use_env_llm:
+            self.env_llm_wg = all_wg['env_llm']
+            self.env_llm_wg.init_model()
+            self.env.env_llm_worker = self.env_llm_wg
+            self.val_env.env_llm_worker = self.env_llm_wg
 
         # we should create rollout at the end so that vllm can have a better estimation of kv cache memory
         self.actor_rollout_wg = all_wg['actor_rollout']
@@ -591,7 +607,7 @@ class RayPPOTrainer(object):
         The light-weight advantage computation is done on the driver process.
         """
 
-        
+        breakpoint()
         logger = self.logger
         self.global_steps = 0
         # perform validation before training

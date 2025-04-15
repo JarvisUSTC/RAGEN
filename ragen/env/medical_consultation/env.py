@@ -11,6 +11,8 @@ from verl import DataProto
 from transformers import AutoTokenizer
 from ragen.workers.env_llm_worker import EnvironmentLLMWorker
 from omegaconf import OmegaConf
+import ray
+import numpy as np
 
 class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
     """
@@ -66,17 +68,16 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
         
         # Extract target and numbers for each problem
         data = []
-        for item in df.reward_model.values[:200]:
-            d = json.loads(item)
+        for item in df.reward_model.values:
             data.append(
                 {
-                    'target': d['ground_truth'],
-                    'patient_information': d['patient_information']
+                    'target': item['ground_truth'],
+                    'patient_information': item['patient_information']
                 }
             )
 
         # Create mapping from original indices to sequential indices
-        original_indices = [json.loads(item)['index'] for item in df.extra_info.values]
+        original_indices = [item['index'] for item in df.extra_info.values]
         seed_to_index = {orig_idx: new_idx for new_idx, orig_idx in enumerate(original_indices)}
         
         return data, seed_to_index
@@ -91,7 +92,7 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
         self.index = self.seed_to_index[seed]
         self.candidate_questions = self.data[self.index]['patient_information'] # [{"doctor_question": ["你好，这种情况多长时间了？"], "patient_response": ["两三天了。", "隐隐作痛，疼一会就不疼了。"]}]
         # 过滤一下self.candidate_questions，保留'patient_response'和'doctor_question'同时存在的
-        self.candidate_questions = [q for q in self.candidate_questions if "patient_response" in q and "doctor_question" in q]
+        self.candidate_questions = [q for q in self.candidate_questions if "patient_response" in q and "doctor_question" in q and isinstance(q['patient_response'], np.ndarray) and isinstance(q['doctor_question'], np.ndarray)]
         self.visited_questions = [] # index of the visited questions
         return self.render()
     
@@ -145,8 +146,8 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
                 'attention_mask': self.tokenizer(prompt, return_tensors='pt')['attention_mask']
             })
             
-            # Generate patient response
-            response_data = self.env_llm_worker.generate_responses(prompt_data)
+            # Generate patient response using Ray remote call
+            response_data = ray.get(self.env_llm_worker.generate_responses.remote(prompt_data))
             llm_response = self.tokenizer.decode(response_data.batch['responses'][0], skip_special_tokens=True)
             
             # Extract only the response part after the assistant marker
@@ -212,7 +213,8 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
                 candidate_questions_text += f"Question {q_idx}:\n"
                 for q in q_item["doctor_question"]:
                     candidate_questions_text += f"  - {q}\n"
-                candidate_questions_text += f"  Response: {' '.join(q_item['patient_response'])}\n\n"
+                patient_response = " ".join(q_item['patient_response'])
+                candidate_questions_text += f"  Response: {patient_response}\n\n"
         
         # Create the prompt
         prompt = f"""<|im_start|>user\nYou are a patient answering a doctor's question.
@@ -319,7 +321,7 @@ Doctor's question: {doctor_question}
         
         return lcs_len / max_len if max_len > 0 else 0.0
     
-    def render(self, mode: str = 'text') -> str:
+    def render(self, mode: str = 'rgb_array') -> str:
         """
         Render the current state of the environment.
         
@@ -327,12 +329,12 @@ Doctor's question: {doctor_question}
         the current state of the medical consultation.
         
         Args:
-            mode: Rendering mode (only 'text' is supported)
+            mode: Rendering mode (only 'rgb_array' is supported)
             
         Returns:
             A string representation of the current state
         """
-        if mode != 'text':
+        if mode != 'rgb_array': # keep consistent with the original ragen
             raise ValueError(f"Unsupported render mode: {mode}")
             
         # 构建输出
@@ -442,6 +444,27 @@ Doctor's question: {doctor_question}
                 dones[i] = done
                 continue
             
+            # 处理无效动作
+            if not av:
+                obs = "Your question is invalid"
+                reward = -2.0
+                done = False
+                
+                # 更新跟踪变量
+                env._update_tracking_variables(
+                    response=response,
+                    action=action,
+                    action_is_valid=av,
+                    action_is_effective=False,
+                    reward=reward
+                )
+                
+                # 生成观察
+                obs = cls.formulate_output(obs, done)
+                next_obs[i] = obs
+                dones[i] = done
+                continue
+            
             # 检查是否是诊断动作
             if "<diagnosis>" in action:
                 # 提取诊断内容
@@ -482,59 +505,9 @@ Doctor's question: {doctor_question}
                     continue
             
             # 收集需要 LLM 处理的环境
-            if env.env_llm_worker is not None:
-                llm_envs.append(env)
-                llm_actions.append(action)
-                llm_indices.append(i)
-                continue
-            
-            # 对于不需要 LLM 处理的环境，使用默认响应
-            response_text = env._get_fallback_response(action)
-            env.conversation_history.append({"role": "doctor", "content": action})
-            env.conversation_history.append({"role": "patient", "content": response_text})
-            
-            # 计算基于候选问题的即时奖励
-            reward = -0.5  # 基础奖励
-            
-            # 检查问题是否匹配候选问题
-            if env.candidate_questions is not None:
-                matched = False
-                for q_idx, q_item in enumerate(env.candidate_questions):
-                    if q_idx in env.visited_questions:
-                        continue  # 跳过已访问过的问题
-                    
-                    # 检查问题是否匹配
-                    for q in q_item["doctor_question"]:
-                        if q in action:
-                            matched = True
-                            reward += 1.0  # 匹配到新的候选问题，奖励 +1
-                            env.visited_questions.append(q_idx)  # 记录已访问的问题
-                            break
-                    if matched:
-                        break
-                
-                # 检查是否是重复问题
-                if not matched and env.visited_questions:
-                    for q_idx in env.visited_questions:
-                        for q in env.candidate_questions[q_idx]["doctor_question"]:
-                            if q in action:
-                                reward -= 1.0  # 重复问题，惩罚 -1
-            
-            done = env.finished()
-            
-            # 更新跟踪变量
-            env._update_tracking_variables(
-                response=response,
-                action=action,
-                action_is_valid=av,
-                action_is_effective=True,
-                reward=reward
-            )
-            
-            # 生成观察
-            obs = cls.formulate_output(env.render(), done)
-            next_obs[i] = obs
-            dones[i] = done
+            llm_envs.append(env)
+            llm_actions.append(action)
+            llm_indices.append(i)
         
         # 批量处理需要 LLM 的环境
         if llm_envs:
@@ -545,13 +518,15 @@ Doctor's question: {doctor_question}
                 batch_prompts.append(prompt)
             
             # 创建批量 DataProto
+            batch_encodings = tokenizer(batch_prompts, padding=True, truncation=True, return_tensors='pt')
+
             batch_data = DataProto.from_dict({
-                'input_ids': torch.stack([tokenizer(prompt, return_tensors='pt')['input_ids'][0] for prompt in batch_prompts]),
-                'attention_mask': torch.stack([tokenizer(prompt, return_tensors='pt')['attention_mask'][0] for prompt in batch_prompts])
+                'input_ids': batch_encodings['input_ids'],
+                'attention_mask': batch_encodings['attention_mask']
             })
             
-            # 批量生成响应
-            batch_responses = llm_envs[0].env_llm_worker.generate_responses(batch_data)
+            # 处理GPU填充
+            batch_responses = cls._handle_gpu_padding(llm_envs[0].env_llm_worker, batch_data)
             batch_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in batch_responses.batch['responses']]
             
             # 处理每个环境的响应
@@ -598,7 +573,7 @@ Doctor's question: {doctor_question}
                     response=response,
                     action=action,
                     action_is_valid=av,
-                    action_is_effective=True,
+                    action_is_effective=reward > 0,
                     reward=reward
                 )
                 
@@ -608,6 +583,59 @@ Doctor's question: {doctor_question}
                 dones[env_idx] = done
         
         return next_obs, dones
+        
+    @classmethod
+    def _handle_gpu_padding(cls, env_llm_worker, batch_data):
+        """
+        处理GPU填充，确保批次大小能被GPU数量整除
+        
+        Args:
+            env_llm_worker: 环境LLM工作器
+            batch_data: 批次数据
+            
+        Returns:
+            处理后的批次响应
+        """
+        # 获取GPU数量
+        num_gpus = torch.distributed.get_world_size()
+        if num_gpus <= 1:
+            return env_llm_worker.generate_responses(batch_data)
+            
+        batch_size = batch_data.batch['input_ids'].shape[0]
+        remainder = batch_size % num_gpus
+        
+        if remainder == 0:
+            return env_llm_worker.generate_responses(batch_data)
+            
+        # 添加填充序列
+        padding_size = num_gpus - remainder
+        padded_batch = {}
+        
+        for k, v in batch_data.batch.items():
+            # 使用第一个序列作为填充模板
+            pad_sequence = v[0:1].repeat(padding_size, *[1] * (len(v.shape) - 1))
+            padded_batch[k] = torch.cat([v, pad_sequence], dim=0)
+            
+        padded_batch_data = DataProto.from_dict(padded_batch)
+        
+        # 使用填充批次生成
+        padded_output = env_llm_worker.generate_responses(padded_batch_data)
+        
+        # 从输出中移除填充
+        trimmed_batch = {k: v[:-padding_size] for k, v in padded_output.batch.items()}
+        
+        # 处理meta_info（如果存在）
+        if hasattr(padded_output, 'meta_info') and padded_output.meta_info:
+            trimmed_meta = {}
+            for k, v in padded_output.meta_info.items():
+                if isinstance(v, torch.Tensor):
+                    trimmed_meta[k] = v[:-padding_size]
+                else:
+                    trimmed_meta[k] = v
+            padded_output.meta_info = trimmed_meta
+            
+        padded_output.batch = trimmed_batch
+        return padded_output
 
 if __name__ == "__main__":
     # 导入必要的模块

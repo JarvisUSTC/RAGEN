@@ -1,17 +1,16 @@
-
 # Trainig paradigm
 rl_or_sft: "rl"
 # System settings
 system:
-  cuda_visible_devices: 0
-  n_gpus: 1
+  cuda_visible_devices: "0,1,2,3"
+  n_gpus: 4
   vllm_attention_backend: "XFORMERS"
   hydra_output_subdir: "outputs/exp_configs/logs/$(date +%Y-%m-%d)/$(date +%H-%M-%S)"
 
 # Model settings
 model:
-  base_model: "Qwen/Qwen2.5-0.5B-Instruct"
-  experiment_name: "ragen-main-exp"
+  base_model: "/workspace/Jiawei/Models/Qwen2.5-7B-Instruct"
+  experiment_name: "ragen-main-exp-medical-consultation"
   gradient_checkpointing: true
 
 # Training parameters
@@ -19,15 +18,15 @@ training:
   train_data_num: null
   val_data_num: 100
   val_batch_size: 100
-  micro_batch_size: 4
-  train_batch_size: 8
-  ppo_batch_size: 32
-  max_start_length: 400
-  max_response_length: 400
-  max_obs_length: 200
+  micro_batch_size: 8
+  train_batch_size: 16
+  ppo_batch_size: 64
+  max_start_length: 512
+  max_response_length: 128
+  max_obs_length: 128
   max_turns: 5
-  rollout_tp_size: 1
-  n_rollout: 16
+  rollout_tp_size: 4
+  n_rollout: 32
   total_epochs: 5
   temperature: 0.7
   use_sft: false
@@ -36,14 +35,14 @@ training:
   binary_reward: false
   mask_state: false
   length_penalty: false
-  ref_update_steps: null # every ref_update_steps, the reference model will be updated using the latest actor model
+  ref_update_steps: null
   total_training_steps: 200
 
 # Optimization parameters
 optimization:
   actor_lr: 1e-6
   critic_lr: 1e-5
-  use_kl_loss: true # this means actor KL Loss
+  use_kl_loss: true
   kl_coef: 0.01
   kl_type: low_var_kl
   adv_estimator: gae
@@ -67,7 +66,7 @@ trainer:
   default_hdfs_dir: null
   nnodes: 1
   save_freq: 200
-  test_freq: 50 # 100
+  test_freq: 50
   project_name: "RAGEN"
 
 # SFT settings
@@ -102,7 +101,7 @@ sft:
     lora_alpha: 32
     target_modules: "all-linear"
     enable_gradient_checkpointing: false
-    base_model: "Qwen/Qwen2.5-0.5B-Instruct"
+    base_model: "/workspace/Jiawei/Models/Qwen2.5-7B-Instruct"
     project_name: "RAGEN"
   
   # Sokoban-specific settings

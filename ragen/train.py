@@ -55,13 +55,63 @@ def get_rl_train_command(config: Dict[str, Any]) -> str:
     env_kwargs_str = " \\\n    ".join([
         f"+env.{key}={value}" if value is not None else f"+env.{key}=null" for key, value in env_kwargs.items()
     ])
+    
+    # Add env_llm configuration
+    env_llm_config = config['env'].get('env_llm', {})
+    env_llm_str = ""
+    if env_llm_config:
+        # FSDP config - only keep fsdp_size and param_offload
+        fsdp_config = env_llm_config.get('fsdp_config', {})
+        if fsdp_config:
+            fsdp_params = {k: v for k, v in fsdp_config.items() if k in ['fsdp_size', 'param_offload']}
+            if fsdp_params:
+                env_llm_str += " \\\n    ".join([
+                    f"env.env_llm.fsdp_config.{key}={value}" for key, value in fsdp_params.items()
+                ])
+                env_llm_str += " \\\n    "
+        
+        # vLLM config
+        vllm_config = env_llm_config.get('vllm_config', {})
+        if vllm_config:
+            env_llm_str += " \\\n    ".join([
+                f"env.env_llm.vllm_config.{key}={value}" for key, value in vllm_config.items()
+            ])
+            env_llm_str += " \\\n    "
+        
+        # Model config
+        model_config = env_llm_config.get('model', {})
+        if model_config:
+            model_params = {k: v for k, v in model_config.items() if k in ['path', 'trust_remote_code', 'use_liger']}
+            if model_params:
+                env_llm_str += " \\\n    ".join([
+                    f"env.env_llm.model.{key}={value}" for key, value in model_params.items()
+                ])
+            env_llm_str += " \\\n    "
+        
+        # Generation config
+        generation_config = env_llm_config.get('generation', {})
+        if generation_config:
+            env_llm_str += " \\\n    ".join([
+                f"env.env_llm.generation.{key}={value}" for key, value in generation_config.items()
+            ])
+            env_llm_str += " \\\n    "
+        
+        # Other env_llm configs
+        other_configs = {k: v for k, v in env_llm_config.items() 
+                        if k not in ['fsdp_config', 'vllm_config', 'model', 'generation']}
+        if other_configs:
+            env_llm_str += " \\\n    ".join([
+                f"env.env_llm.{key}={value}" for key, value in other_configs.items()
+            ])
+            env_llm_str += " \\\n    "
+    
     cmd = [
         f"VLLM_ATTENTION_BACKEND={config['system']['vllm_attention_backend']}",
         f"CUDA_VISIBLE_DEVICES={config['system']['cuda_visible_devices']}",
         "python -m ragen.trainer.main_ppo",
         f"hydra.run.dir={config['system']['hydra_output_subdir']}",
-        f"data.train_files={config['env']['data_dir']}/train.parquet",
-        f"data.val_files={config['env']['data_dir']}/test.parquet",
+        f"data.train_files={config['env']['train_path']}",
+        f"data.val_files={config['env']['val_path']}",
         f"data.train_data_num={config['training']['train_data_num'] or 'null'}",
         f"data.val_data_num={config['training']['val_data_num'] or 'null'}",
         f"data.train_batch_size={config['training']['train_batch_size']}",
@@ -117,7 +167,9 @@ def get_rl_train_command(config: Dict[str, Any]) -> str:
         f"trainer.total_training_steps={config['training']['total_training_steps'] or 'null'}",
         f"+trainer.ref_update_steps={config['training']['ref_update_steps'] or 'null'}",
         f"env.name={config['env']['name']}",
+        f"env.use_env_llm={config['env'].get('use_env_llm', False)}",
         env_kwargs_str,
+        env_llm_str,  # Add env_llm configuration
         f"max_turns={config['training']['max_turns']}",
         f"logging.log_images={str(config['logging']['log_images']).lower()}",
         f"logging.log_image_dir={config['logging']['log_image_dir']}",

@@ -206,11 +206,12 @@ def main_task(config):
         raise NotImplementedError
 
     from ragen.trainer.ppo.ray_trainer import ResourcePoolManager, Role
+    from ragen.workers.env_llm_worker import EnvironmentLLMWorker
 
     role_worker_mapping = {
         Role.ActorRollout: ray.remote(ActorRolloutRefWorker),
         Role.Critic: ray.remote(CriticWorker),
-        Role.RefPolicy: ray.remote(ActorRolloutRefWorker)
+        Role.RefPolicy: ray.remote(ActorRolloutRefWorker),
     }
 
     global_pool_id = 'global_pool'
@@ -222,6 +223,10 @@ def main_task(config):
         Role.Critic: global_pool_id,
         Role.RefPolicy: global_pool_id,
     }
+
+    if config.env.use_env_llm:
+        role_worker_mapping[Role.EnvLLM] = ray.remote(EnvironmentLLMWorker)
+        mapping[Role.EnvLLM] = global_pool_id
 
     # we should adopt a multi-source reward function here
     # - for rule-based rm, we directly call a reward score

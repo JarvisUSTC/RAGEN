@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import contextmanager
 import os
+import ray
 
 def permanent_seed(seed: int) -> None:
     random.seed(seed)
@@ -83,26 +84,27 @@ def get_train_val_env(env_class, config: dict):
         if config.env.get('use_env_llm', False):
             from ragen.workers.env_llm_worker import EnvironmentLLMWorker
             from transformers import AutoTokenizer
+            import ray
             
-            # Initialize environment LLM worker
-            env_llm_worker = EnvironmentLLMWorker(config.env_llm)
+            # Get the env_llm_worker from Ray
+            # env_llm_worker = ray.get_actor('env_llm')
             
             # Initialize tokenizer for the environment LLM
             tokenizer = AutoTokenizer.from_pretrained(
-                config.env_llm.model.path,
-                trust_remote_code=config.env_llm.model.get('trust_remote_code', False)
+                config.env.env_llm.model.path,
+                trust_remote_code=config.env.env_llm.model.get('trust_remote_code', False)
             )
             
-            print(f"[INFO] Initialized environment LLM worker with model: {config.env_llm.model.path}")
+            print(f"[INFO] Using Ray-managed environment LLM worker")
         
         env = env_class(
-            parquet_path=config.env.train_path,
+            parquet_path=config.data.train_files,
             env_llm_worker=env_llm_worker,
             tokenizer=tokenizer
         )
         
         val_env = env_class(
-            parquet_path=config.env.val_path,
+            parquet_path=config.data.val_files,
             env_llm_worker=env_llm_worker,
             tokenizer=tokenizer
         )
