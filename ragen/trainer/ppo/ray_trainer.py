@@ -607,7 +607,6 @@ class RayPPOTrainer(object):
         The light-weight advantage computation is done on the driver process.
         """
 
-        breakpoint()
         logger = self.logger
         self.global_steps = 0
         # perform validation before training
@@ -621,7 +620,7 @@ class RayPPOTrainer(object):
         self.global_steps += 1
 
 
-
+        breakpoint()
         # Agent config preparation
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,

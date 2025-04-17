@@ -250,6 +250,7 @@ env:
       use_beam_search: false
       detokenize: false
       ignore_eos: false
+      free_cache_engine: true
 
       # --- 日志/概率输出 ---
       prompt_logprobs: 0
