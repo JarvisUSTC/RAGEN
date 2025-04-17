@@ -16,9 +16,9 @@ model:
 # Training parameters
 training:
   train_data_num: null
-  val_data_num: 100
-  val_batch_size: 100
-  micro_batch_size: 8
+  val_data_num: 10
+  val_batch_size: 10
+  micro_batch_size: 4
   train_batch_size: 16
   ppo_batch_size: 64
   max_start_length: 512
@@ -26,12 +26,12 @@ training:
   max_obs_length: 128
   max_turns: 5
   rollout_tp_size: 4
-  n_rollout: 32
+  n_rollout: 16
   total_epochs: 5
   temperature: 0.7
   use_sft: false
   no_think_rl: false
-  state_masking: false
+  state_masking: true
   binary_reward: false
   mask_state: false
   length_penalty: false

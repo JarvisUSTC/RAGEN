@@ -9,9 +9,9 @@ python -m ragen.trainer.main_ppo \
   data.train_files=/workspace/Jiawei/Project/RAGEN-Dialogue/data/medical_consultation/train_tr1.parquet \
   data.val_files=/workspace/Jiawei/Project/RAGEN-Dialogue/data/medical_consultation/val_tr1.parquet \
   data.train_data_num=null \
-  data.val_data_num=100 \
+  data.val_data_num=12 \
   data.train_batch_size=16 \
-  data.val_batch_size=100 \
+  data.val_batch_size=12 \
   data.max_prompt_length=1664 \
   data.max_response_length=128 \
   data.max_start_length=512 \
@@ -41,9 +41,9 @@ python -m ragen.trainer.main_ppo \
   +algorithm.reward_norm_type=brpo \
   +actor_rollout_ref.actor.optim.betas=[0.9,0.95] \
   +critic.optim.betas=[0.9,0.95] \
-  actor_rollout_ref.rollout.n_agent=32 \
+  actor_rollout_ref.rollout.n_agent=16 \
   actor_rollout_ref.rollout.temperature=0.7 \
-  actor_rollout_ref.actor.state_masking=False \
+  actor_rollout_ref.actor.state_masking=True \
   trainer.logger=['wandb'] \
   +trainer.val_only=false \
   +trainer.val_before_train=true \
@@ -85,6 +85,7 @@ python -m ragen.trainer.main_ppo \
   env.env_llm.generation.use_beam_search=False \
   env.env_llm.generation.detokenize=False \
   env.env_llm.generation.ignore_eos=False \
+  env.env_llm.generation.free_cache_engine=True \
   env.env_llm.generation.prompt_logprobs=0 \
   env.env_llm.generation.generation_logprobs=1 \
   env.env_llm.generation.disable_log_stats=True \
