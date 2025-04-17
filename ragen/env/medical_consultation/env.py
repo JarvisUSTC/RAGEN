@@ -8,6 +8,7 @@ from rouge_score import rouge_scorer
 import json
 import torch
 from verl import DataProto
+from verl.utils.model import compute_position_id_with_mask
 from transformers import AutoTokenizer
 from ragen.workers.env_llm_worker import EnvironmentLLMWorker
 from omegaconf import OmegaConf
@@ -22,6 +23,11 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
     """
 
     INVALID_ACTION = "No question."
+    
+    # 类级别的共享数据
+    _shared_data = None
+    _shared_seed_to_index = None
+    _parquet_path = None
 
     def __init__(self, parquet_path: str, env_llm_worker=None, tokenizer=None):
         """
@@ -33,18 +39,39 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
             tokenizer: Tokenizer for the environment LLM
         """
         BaseLanguageBasedEnv.__init__(self)
-        self.data, self.seed_to_index = self._get_data_from_parquet(parquet_path)
+        
+        # 只在第一次初始化时加载数据
+        if MedicalConsultationEnv._shared_data is None:
+            MedicalConsultationEnv._shared_data, MedicalConsultationEnv._shared_seed_to_index = self._get_data_from_parquet(parquet_path)
+            MedicalConsultationEnv._parquet_path = parquet_path
+        
+        # 实例级别的变量
         self.parquet_path = parquet_path
         self.conversation_history = []
         self.diagnosis_made = False
         self.max_turns = 5  # Maximum number of questions allowed
-        self.index = None # index of the data
-        self.candidate_questions = None # candidate questions (from the gt)
-        self.visited_questions = [] # visited questions
+        self.index = None  # index of the data
+        self.candidate_questions = None  # candidate questions (from the gt)
+        self.visited_questions = []  # visited questions
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True) 
         self.env_llm_worker = env_llm_worker
         self.tokenizer = tokenizer
         self.current_turn = 0
+
+    @classmethod
+    def clear_shared_data(cls):
+        """Clear shared data when needed"""
+        cls._shared_data = None
+        cls._shared_seed_to_index = None
+        cls._parquet_path = None
+
+    @classmethod
+    def get_shared_data_size(cls) -> int:
+        """Get the size of shared data in memory"""
+        if cls._shared_data is None:
+            return 0
+        import sys
+        return sys.getsizeof(cls._shared_data) + sys.getsizeof(cls._shared_seed_to_index)
 
     @staticmethod
     def _get_data_from_parquet(path: str):
@@ -89,11 +116,14 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
             
         # Reset tracking variables
         self._reset_tracking_variables()
-        self.index = self.seed_to_index[seed]
-        self.candidate_questions = self.data[self.index]['patient_information'] # [{"doctor_question": ["你好，这种情况多长时间了？"], "patient_response": ["两三天了。", "隐隐作痛，疼一会就不疼了。"]}]
+        self.index = self._shared_seed_to_index[seed]
+        self.candidate_questions = self._shared_data[self.index]['patient_information']
         # 过滤一下self.candidate_questions，保留'patient_response'和'doctor_question'同时存在的
         self.candidate_questions = [q for q in self.candidate_questions if "patient_response" in q and "doctor_question" in q and isinstance(q['patient_response'], np.ndarray) and isinstance(q['doctor_question'], np.ndarray)]
-        self.visited_questions = [] # index of the visited questions
+        self.visited_questions = []  # index of the visited questions
+        self.diagnosis_made = False
+        self.current_turn = 0
+        self.conversation_history = []
         return self.render()
     
     def step(self, action: str) -> Tuple[str, float, bool, Dict]:
@@ -109,26 +139,26 @@ class MedicalConsultationEnv(BaseLanguageBasedEnv, gym.Env):
         if self.diagnosis_made:
             return self.render(), 0, True, {"action_is_effective": False}
         
-        reward = -0.5 # Penalty for each turn
+        reward = -0.5  # Penalty for each turn
         self.current_turn += 1
             
-        # Check if the action is a diagnosis: Setting a special tag to indicate the action is a diagnosis <diagnosis>xxx</diagnosis>; Match the tag and extract the diagnosis
+        # Check if the action is a diagnosis
         if "<diagnosis>" in action:
             # Match the tag and extract the diagnosis
             diagnosis = re.search(r"<diagnosis>(.*?)</diagnosis>", action).group(1)
             self.diagnosis_made = True
             # GT diagnosis
-            gt_diagnosis = self.data[self.index]['target']['diagnosis'] # TODO: change to the unified format
+            gt_diagnosis = self._shared_data[self.index]['target']['diagnosis']
             # Calculate the similarity score based on Longest Common Subsequence (LCS)
             similarity = self._get_rouge_score(diagnosis, gt_diagnosis)
-            reward = similarity * 10 # Scale the reward to 10
+            reward = similarity * 10  # Scale the reward to 10
 
             # GT Suggestion
-            gt_suggestion = self.data[self.index]['target']['recommendation'] # TODO: change to the unified format
+            gt_suggestion = self._shared_data[self.index]['target']['recommendation']
             if len(gt_suggestion) > 0:
                 suggestion = re.search(r"<suggestion>(.*?)</suggestion>", action).group(1)
                 similarity = self._get_rouge_score(suggestion, gt_suggestion)
-                reward += similarity * 10 # Scale the reward to 10 (maybe leverage llm to calculate the similarity is better)
+                reward += similarity * 10  # Scale the reward to 10
 
             return self.render(), reward, True, {"action_is_effective": True}
         
@@ -375,22 +405,26 @@ Doctor's question: {doctor_question}
         """
         Check if the consultation is finished.
         """
-        return self.diagnosis_made or len(self.conversation_history) >= self.max_turns
+        return self.diagnosis_made or len(self.conversation_history) >= self.max_turns * 2
     
     def copy(self) -> 'MedicalConsultationEnv':
         """
         Create a deep copy of the environment.
+        Only copy instance-specific data, share static data.
         """
         new_env = MedicalConsultationEnv(
             parquet_path=self.parquet_path,
-            env_llm_worker=self.env_llm_worker,  # 复制 env_llm_worker 引用
-            tokenizer=self.tokenizer  # 复制 tokenizer 引用
+            env_llm_worker=self.env_llm_worker,
+            tokenizer=self.tokenizer
         )
+        
+        # 只复制实例特定的数据
         new_env.conversation_history = self.conversation_history.copy()
         new_env.diagnosis_made = self.diagnosis_made
         new_env.candidate_questions = self.candidate_questions
-        new_env.visited_questions = self.visited_questions
+        new_env.visited_questions = self.visited_questions.copy()
         new_env.index = self.index
+        new_env.current_turn = self.current_turn
 
         self._copy_tracking_variables(new_env)
         return new_env
@@ -402,13 +436,7 @@ Doctor's question: {doctor_question}
         return text.strip() 
     
     @classmethod
-    def execute_predictions(
-        cls, 
-        envs: List['MedicalConsultationEnv'], 
-        predictions: List[str], 
-        prediction_ids: torch.Tensor,
-        tokenizer: AutoTokenizer,
-    ) -> List[str]:
+    def execute_predictions(cls, envs: List['MedicalConsultationEnv'], predictions: List[str], prediction_ids: torch.Tensor, tokenizer: AutoTokenizer):
         """
         Execute predictions across multiple environments with batch LLM processing.
         
@@ -433,6 +461,8 @@ Doctor's question: {doctor_question}
         llm_indices = []
         
         for i, (env, action, response, response_id, av) in enumerate(zip(envs, cur_actions, predictions, prediction_ids, action_is_valid)):
+            env.current_turn += 1
+
             obs = ""
             if "<|im_end|>" not in response:
                 obs += "<|im_end|>"
@@ -447,7 +477,7 @@ Doctor's question: {doctor_question}
             # 处理无效动作
             if not av:
                 obs = "Your question is invalid"
-                reward = -2.0
+                reward = -1.0
                 done = False
                 
                 # 更新跟踪变量
@@ -474,7 +504,7 @@ Doctor's question: {doctor_question}
                     env.diagnosis_made = True
                     
                     # 获取真实诊断
-                    gt_diagnosis = env.data[env.index]['target']['诊断']
+                    gt_diagnosis = cls._shared_data[env.index]['target']['诊断']
                     
                     # 计算诊断的 similarity 分数
                     similarity = env._get_rouge_score(diagnosis, gt_diagnosis)
@@ -484,7 +514,7 @@ Doctor's question: {doctor_question}
                     suggestion_match = re.search(r"<suggestion>(.*?)</suggestion>", action)
                     if suggestion_match:
                         suggestion = suggestion_match.group(1).strip()
-                        gt_suggestion = env.data[env.index]['target']['建议']
+                        gt_suggestion = cls._shared_data[env.index]['target']['建议']
                         if len(gt_suggestion) > 0:
                             similarity = env._get_rouge_score(suggestion, gt_suggestion)
                             reward += similarity * 10  # 建议奖励
@@ -520,11 +550,21 @@ Doctor's question: {doctor_question}
             # 创建批量 DataProto
             batch_encodings = tokenizer(batch_prompts, padding=True, truncation=True, return_tensors='pt')
 
+            # Compute position_ids from attention_mask
+            position_ids = compute_position_id_with_mask(batch_encodings['attention_mask'])
+
             batch_data = DataProto.from_dict({
                 'input_ids': batch_encodings['input_ids'],
-                'attention_mask': batch_encodings['attention_mask']
+                'attention_mask': batch_encodings['attention_mask'],
+                'position_ids': position_ids
             })
-            
+            batch_data.meta_info = {
+                'eos_token_id': tokenizer.eos_token_id,
+                'pad_token_id': tokenizer.pad_token_id,
+                'recompute_log_prob': False,
+                'do_sample': False,
+                'validate': True,
+            }
             # 处理GPU填充
             batch_responses = cls._handle_gpu_padding(llm_envs[0].env_llm_worker, batch_data)
             batch_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in batch_responses.batch['responses']]
@@ -542,7 +582,7 @@ Doctor's question: {doctor_question}
                 
                 # 从响应中提取问题编号
                 question_idx = -1  # 默认问题编号为-1，表示没有匹配
-                answer_match = re.search(r"<answer>(\d+)</answer>", response_text)
+                answer_match = re.search(r"<answer>(-?\d+)</answer>", response_text)
                 if answer_match:
                     question_idx = int(answer_match.group(1))
                 
@@ -597,7 +637,7 @@ Doctor's question: {doctor_question}
             处理后的批次响应
         """
         # 获取GPU数量
-        num_gpus = torch.distributed.get_world_size()
+        num_gpus = env_llm_worker._world_size
         if num_gpus <= 1:
             return env_llm_worker.generate_responses(batch_data)
             
@@ -617,6 +657,7 @@ Doctor's question: {doctor_question}
             padded_batch[k] = torch.cat([v, pad_sequence], dim=0)
             
         padded_batch_data = DataProto.from_dict(padded_batch)
+        padded_batch_data.meta_info = batch_data.meta_info
         
         # 使用填充批次生成
         padded_output = env_llm_worker.generate_responses(padded_batch_data)

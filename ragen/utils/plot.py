@@ -83,8 +83,14 @@ def save_trajectory_to_output(trajectory, save_dir) -> List[str]:
         n_steps = len(data['state'])
         
         for step in range(n_steps):
-            # Convert images to base64
-            image_state = image_to_base64(data['state'][step])
+            if True: # TODO: how to check if the state is a string or a image?
+                # Handle the state as a string
+                image_state = data['state'][step]
+                is_string_state = True
+            else:
+                # Convert images to base64
+                image_state = image_to_base64(data['state'][step])
+                is_string_state = False
             
             # Process response text
             parsed_response = data['parsed_response'][step]['raw']
@@ -94,13 +100,17 @@ def save_trajectory_to_output(trajectory, save_dir) -> List[str]:
             parsed_response = html.escape(parsed_response)
             
             # Create step HTML
+            if is_string_state:
+                state_html = f'<div class="image-title">State</div><div class="response-box">{html.escape(image_state)}</div>'
+            else:
+                state_html = f'<div class="image-title">State</div><img src="data:image/png;base64,{image_state}" alt="State">'
+            
             step_html = f'''
             <div class="trajectory-step">
                 <div class="step-number">Step {step + 1}</div>
                 <div class="image-container">
                     <div class="image-box">
-                        <div class="image-title">State</div>
-                        <img src="data:image/png;base64,{image_state}" alt="State">
+                        {state_html}
                     </div>
                 </div>
                 <div class="response-box">
